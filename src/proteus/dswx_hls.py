@@ -2455,6 +2455,19 @@ def generate_dswx_layers(input_list,
                                        sun_azimuth_angle, sun_elevation_angle)
         shadow_layer_with_margin = _compute_otsu_threshold(hillshade, is_normalized = True)
 
+
+        # TODO remove this:
+        hillshade = hillshade[DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS,
+                              DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS]
+        if output_confidence_layer:
+            _save_array(hillshade, output_confidence_layer,
+                        dswx_metadata_dict, geotransform, projection,
+                        output_dtype=gdal.GDT_Float32,
+                        scratch_dir=scratch_dir,
+                        description=band_description_dict['CONF'],
+                        output_files_list=build_vrt_list)
+
+
         # remove extra margin from DEM
         dem = dem_with_margin[DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS,
                               DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS]
@@ -2477,6 +2490,7 @@ def generate_dswx_layers(input_list,
         if output_shadow_layer:
             _save_array(shadow_layer, output_shadow_layer,
                         dswx_metadata_dict, geotransform, projection,
+                        output_dtype=gdal.GDT_Float32,
                         description=band_description_dict['SHAD'],
                         scratch_dir=scratch_dir,
                         output_files_list=build_vrt_list)
@@ -2590,6 +2604,7 @@ def generate_dswx_layers(input_list,
                            output_files_list=build_vrt_list)
 
     # TODO: fix CONF layer!!!
+    '''
     if output_confidence_layer:
         _save_binary_water(binary_water_layer, output_confidence_layer,
                            dswx_metadata_dict,
@@ -2597,6 +2612,7 @@ def generate_dswx_layers(input_list,
                            scratch_dir=scratch_dir,
                            description=band_description_dict['CONF'],
                            output_files_list=build_vrt_list)
+    '''
 
     # save output_file as GeoTIFF
     if output_file and not output_file.endswith('.vrt'):
