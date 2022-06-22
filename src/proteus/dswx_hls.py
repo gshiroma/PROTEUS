@@ -2795,7 +2795,6 @@ def generate_dswx_layers(input_list,
                         description=band_description_dict['CONF'],
                         output_files_list=build_vrt_list)
 
-        return
         # end of DEBUG CODE !!!
                         
 
