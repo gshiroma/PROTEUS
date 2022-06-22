@@ -2269,6 +2269,239 @@ def _compute_hillshade(dem_file, scratch_dir, sun_azimuth_angle,
     del gdal_ds
     return hillshade
 
+
+def _compute_slope(dem, sun_azimuth_angle, sun_elevation_angle,
+                   pixel_spacing_x = 30, pixel_spacing_y = 30):
+    sun_azimuth = np.radians(sun_azimuth_angle)
+    sun_zenith = np.radians(90 - sun_elevation_angle)
+
+    target_to_sun_unit_vector = [np.sin(sun_azimuth) * np.sin(sun_zenith),
+                                 np.cos(sun_azimuth) * np.sin(sun_zenith),
+                                 np.cos(sun_zenith)]
+    
+    gradient_h = np.gradient(dem)
+    terrain_normal_vector = [-gradient_h[1] / pixel_spacing_x,
+                             -gradient_h[0] / - abs(pixel_spacing_y),
+                             1]
+    normalization_factor = np.sqrt(terrain_normal_vector[0] ** 2 +
+                                   terrain_normal_vector[1] ** 2 + 1)
+
+    local_inc_angle = np.arccos(
+        (terrain_normal_vector[0] * target_to_sun_unit_vector[0] +
+         terrain_normal_vector[1] * target_to_sun_unit_vector[1] +
+         terrain_normal_vector[2] * target_to_sun_unit_vector[2]) /
+         normalization_factor)
+    local_inc_angle_degrees = np.degrees(local_inc_angle)
+        
+    # TODO improve masking
+
+    shaded_relief = 1.0 / np.tan(local_inc_angle)
+
+    # shaded relief should not have negative values (e.g., local-inc > 90)
+    clip_min = 0
+    clip_max = None
+    shaded_relief = np.clip(shaded_relief, clip_min, clip_max)
+
+    directional_slope = np.arctan(
+        terrain_normal_vector[0] * target_to_sun_unit_vector[0] +
+        terrain_normal_vector[1] * target_to_sun_unit_vector[1])
+
+    geometry_dict = {}
+    geometry_dict['local_inc_angle'] = np.degrees(local_inc_angle)
+    geometry_dict['shaded_relief'] = shaded_relief
+    geometry_dict['directional_slope'] = directional_slope
+    geometry_dict['directional_slope_angle'] = \
+        np.degrees(np.arctan(directional_slope))
+
+    geometry_dict['backslope_mask'] = \
+        geometry_dict['directional_slope_angle'] < -5
+    geometry_dict['flat_slope_mask'] = \
+        ((geometry_dict['directional_slope_angle'] >= -5) & \
+         (geometry_dict['directional_slope_angle'] < 5))
+    geometry_dict['not_flat_slope_mask'] = \
+        ((geometry_dict['directional_slope_angle'] < -5) | \
+         (geometry_dict['directional_slope_angle'] >= 5))
+    geometry_dict['foreslope_mask'] = \
+        geometry_dict['directional_slope_angle'] >= 5
+
+    geometry_dict['low_local_inc_angle_mask'] = \
+        geometry_dict['local_inc_angle'] <= 40
+    geometry_dict['shadow_mask'] = \
+        (geometry_dict['low_local_inc_angle_mask'] | 
+         (~ geometry_dict['backslope_mask']))
+
+    return geometry_dict
+
+def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blue,
+                   nir, swir1, swir2, qa,
+                   invalid_ind, scale_dict, offset_dict,
+                   geotransform, projection, flag_offset_and_scale_inputs,
+                   dswx_metadata_dict, scratch_dir, flag_db=False):
+
+    import plant
+    import scipy
+
+    red = scale_dict['red'] * (np.asarray(red, dtype=np.float32) -
+                               offset_dict['red'])
+    green = scale_dict['green'] * (np.asarray(green, dtype=np.float32) -
+                               offset_dict['green'])
+    blue = scale_dict['blue'] * (np.asarray(blue, dtype=np.float32) -
+                               offset_dict['blue'])
+    nir = scale_dict['nir'] * (np.asarray(nir, dtype=np.float32) -
+                               offset_dict['nir'])
+    swir1 = scale_dict['swir1'] * (np.asarray(swir1, dtype=np.float32) -
+                               offset_dict['swir1'])
+    swir2 = scale_dict['swir2'] * (np.asarray(swir2, dtype=np.float32) -
+                               offset_dict['swir2'])
+
+    '''
+    red[invalid_ind] = np.nan
+    green[invalid_ind] = np.nan
+    blue[invalid_ind] = np.nan
+    nir[invalid_ind] = np.nan
+    swir1[invalid_ind] = np.nan
+    swir2[invalid_ind] = np.nan
+    ref_image[invalid_ind] = np.nan
+    '''
+
+    # Masking out invalid pixels
+    not_flat_mask[invalid_ind] = 0
+
+    # Q/A masking
+    qa_invalid_ind = np.where((qa % 64) != 0)
+    not_flat_mask[qa_invalid_ind] = 0
+
+    # Binary erosion
+    not_flat_mask = scipy.ndimage.morphology.binary_erosion(not_flat_mask)
+
+    if flag_db:
+        min_db = -50
+        red = np.clip(20*np.log10(red), min_db, None)
+        green = np.clip(20*np.log10(green), min_db, None)
+        blue = np.clip(20*np.log10(blue), min_db, None)
+        nir = np.clip(20*np.log10(nir), min_db, None)
+        swir1 = np.clip(20*np.log10(swir1), min_db, None)
+        swir2 = np.clip(20*np.log10(swir2), min_db, None)
+
+    dummy_offset_dict = {}
+    dummy_offset_dict['red'] = 0
+    dummy_offset_dict['green'] = 0
+    dummy_offset_dict['blue'] = 0
+    dummy_offset_dict['nir'] = 0
+    dummy_offset_dict['swir1'] = 0
+    dummy_offset_dict['swir2'] = 0
+
+    dummy_scale_dict = {}
+    dummy_scale_dict['red'] = 1
+    dummy_scale_dict['green'] = 1
+    dummy_scale_dict['blue'] = 1
+    dummy_scale_dict['nir'] = 1
+    dummy_scale_dict['swir1'] = 1
+    dummy_scale_dict['swir2'] = 1
+
+    red = plant.PlantImage(red, name='Red')
+    green = plant.PlantImage(green, name='Green')
+    blue = plant.PlantImage(blue, name='Blue')
+    nir = plant.PlantImage(nir, name='NIR')
+    swir1 = plant.PlantImage(swir1, name='SWIR-1')
+    swir2 = plant.PlantImage(swir2, name='SWIR-2')
+
+    display_kwargs = {}
+    if 'shaded_relief' in ref_str:
+        display_kwargs['xmin'] = 0
+        display_kwargs['xmax'] = 6
+
+    # trendplot (RGB)
+    shadow_mask_plot_file = os.path.join(
+        'shadow_mask', f'trendplot_rgb_vs_{ref_str}.png')
+    ret = plant.display(ref_image, red, green, blue, output_file=shadow_mask_plot_file,
+                  mask_in=not_flat_mask, linfit=True, trendplot=True, force=True,
+                  title=f'RGB reflectance vs {ref_str} angle', no_show=True,
+                  **display_kwargs)
+    shadow_mask_plot_file = os.path.join(
+        'shadow_mask', f'trendplot_infrared_vs_{ref_str}.png')
+
+    # trendplot (infrared)
+    ret = plant.display(ref_image, nir, swir1, swir2, output_file=shadow_mask_plot_file,
+                  mask_in=not_flat_mask, linfit=True, trendplot=True, force=True,
+                  title=f'NISAR SWIR-1 SWIR-2 reflectance vs {ref_str} angle', no_show=True,
+                  **display_kwargs)
+
+    # density plots (RGB)
+    shadow_mask_plot_file = os.path.join(
+        'shadow_mask', f'density_plot_red_vs_{ref_str}.png')
+    plant.display(ref_image, red, output_file=shadow_mask_plot_file,
+                  density=True, mask_in=not_flat_mask, force=True, no_show=True,
+                  title=f'Red reflectance vs {ref_str} angle', **display_kwargs)
+    shadow_mask_plot_file = os.path.join(
+        'shadow_mask', f'density_plot_green_vs_{ref_str}.png')
+    plant.display(ref_image, green, output_file=shadow_mask_plot_file,
+                  density=True, mask_in=not_flat_mask, force=True, no_show=True,
+                  title=f'Green reflectance vs {ref_str} angle', **display_kwargs)
+    shadow_mask_plot_file = os.path.join(
+        'shadow_mask', f'density_plot_blue_vs_{ref_str}.png')
+    plant.display(ref_image, blue, output_file=shadow_mask_plot_file,
+                  density=True, mask_in=not_flat_mask, force=True, no_show=True,
+                  title=f'Blue reflectance vs {ref_str} angle', **display_kwargs)
+
+    # RGB-color composite
+    image_list = []
+    for i, image_obj in enumerate([red, green, blue]):
+        print('line-fit coefficient: ', ret.linefit_dict['coeffs'][i])
+        offset, slope = ret.linefit_dict['coeffs'][i]
+        print('line-fit r2: ', ret.linefit_dict['r2'][i])
+        print('line-fit RMSE: ', ret.linefit_dict['rmse'][i])
+        image = image_obj.image - slope * (ref_image - ref_value)
+        image = np.clip(image, 0, None)
+        if flag_db:
+            image = 10 ** (image/20)
+        image_list.append(image)
+
+    rgb_file = os.path.join('shadow_mask', f'scaled_rgb_{ref_str}.tif')
+    _save_output_rgb_file(image_list[0], image_list[1], image_list[2], 
+                          rgb_file, dummy_offset_dict, dummy_scale_dict,
+                          flag_offset_and_scale_inputs,
+                          dswx_metadata_dict,
+                          geotransform, projection,
+                          invalid_ind=invalid_ind,
+                          scratch_dir=scratch_dir)
+
+    # prepare output RGB
+    red = (image_list[0] + offset_dict['red']) / scale_dict['red']
+    green = (image_list[1] + offset_dict['green']) / scale_dict['green']
+    blue = (image_list[2] + offset_dict['blue']) / scale_dict['blue']
+
+    # Infrared-color composite
+    image_list = []
+    for i, image_obj in enumerate([nir, swir1, swir2]):
+        print('line-fit coefficient: ', ret.linefit_dict['coeffs'][i])
+        offset, slope = ret.linefit_dict['coeffs'][i]
+        print('line-fit r2: ', ret.linefit_dict['r2'][i])
+        print('line-fit RMSE: ', ret.linefit_dict['rmse'][i])
+        image = image_obj.image - slope * (ref_image - ref_value)
+        image = np.clip(image, 0, None)
+        if flag_db:
+            image = 10 ** (image/20)
+        image_list.append(image)
+
+    rgb_file = os.path.join('shadow_mask', f'scaled_nir_swir1_swir2_{ref_str}.tif')
+    _save_output_rgb_file(image_list[0], image_list[1], image_list[2], 
+                          rgb_file, dummy_offset_dict, dummy_scale_dict,
+                          flag_offset_and_scale_inputs,
+                          dswx_metadata_dict,
+                          geotransform, projection,
+                          invalid_ind=invalid_ind,
+                          scratch_dir=scratch_dir)
+
+    # prepare output infrared
+    nir = (image_list[0] + offset_dict['nir']) / scale_dict['nir']
+    swir1 = (image_list[1] + offset_dict['swir1']) / scale_dict['swir1']
+    swir2 = (image_list[2] + offset_dict['swir2']) / scale_dict['swir2']
+
+    return red, green, blue, nir, swir1, swir2            
+
+
+
 def generate_dswx_layers(input_list,
                          output_file = None,
                          hls_thresholds = None,
@@ -2421,6 +2654,12 @@ def generate_dswx_layers(input_list,
     length = image_dict['length']
     width = image_dict['width']
 
+    # Set invalid pixels to fill value (255)
+    if not flag_offset_and_scale_inputs:
+        invalid_ind = np.where(blue < -5000)
+    else:
+        invalid_ind = np.where(blue < -0.5)
+
     sun_azimuth_angle_meta = dswx_metadata_dict['MEAN_SUN_AZIMUTH_ANGLE'].split(', ')
     sun_zenith_angle_meta = dswx_metadata_dict['MEAN_SUN_ZENITH_ANGLE'].split(', ')
 
@@ -2459,6 +2698,89 @@ def generate_dswx_layers(input_list,
         # TODO remove this:
         hillshade = hillshade[DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS,
                               DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS]
+
+
+        # Shadow mask analysis !!!
+        geometry_dict = _compute_slope(dem_with_margin, sun_azimuth_angle,
+                                      sun_elevation_angle)
+
+        for key in geometry_dict.keys():        
+            image = geometry_dict[key][DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS,
+                        DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS]
+            if key == 'local_inc_angle':
+                lia = image
+            elif key == 'shaded_relief':
+                shaded_relief = image
+            elif key == 'not_flat_slope_mask':
+                not_flat_mask = image
+            current_output_file = os.path.join('shadow_mask', key+'.tif')
+            _save_array(image, current_output_file,
+                dswx_metadata_dict, geotransform, projection,
+                output_dtype=gdal.GDT_Float32,
+                scratch_dir=scratch_dir,
+                description=key)
+
+
+        # lia = geometry_dict['local_inc_angle']
+        # not_flat_mask = geometry_dict['not_flat_slope_mask']
+
+        sun_zenith = np.radians(90 - sun_elevation_angle)
+        red_new, green_new, blue_new, nir_new, swir1_new, swir2_new = \
+            _plot_geometry(lia, sun_zenith, 'local_inc', not_flat_mask,
+                           red, green, blue,
+                           nir, swir1, swir2, qa,
+                           invalid_ind, scale_dict, offset_dict,
+                           geotransform, projection, flag_offset_and_scale_inputs,
+                           dswx_metadata_dict, scratch_dir)
+
+        ''' 
+        _plot_geometry(lia, sun_zenith, 'local_inc_db', not_flat_mask,
+                       red, green, blue,
+                       nir, swir1, swir2, qa,
+                       invalid_ind, scale_dict, offset_dict,
+                       geotransform, projection, flag_offset_and_scale_inputs,
+                       dswx_metadata_dict, scratch_dir, flag_db=True)
+
+        _plot_geometry(shaded_relief, 1 / np.tan(np.radians(sun_zenith)),
+                       'shaded_relief', not_flat_mask,
+                       red, green, blue,
+                       nir, swir1, swir2, qa,
+                       invalid_ind, scale_dict, offset_dict,
+                       geotransform, projection, flag_offset_and_scale_inputs,
+                       dswx_metadata_dict, scratch_dir)
+
+        _plot_geometry(shaded_relief, 1 / np.tan(np.radians(sun_zenith)),
+                       'shaded_relief_db', not_flat_mask,
+                       red, green, blue,
+                       nir, swir1, swir2, qa,
+                       invalid_ind, scale_dict, offset_dict,
+                       geotransform, projection, flag_offset_and_scale_inputs,
+                       dswx_metadata_dict, scratch_dir, flag_db=True)
+
+        '''
+
+        diagnostic_layer = _compute_diagnostic_tests(
+            blue_new, green_new, red_new, nir_new, swir1_new, swir2_new,
+            hls_thresholds)
+
+        interpreted_dswx_band = generate_interpreted_layer(diagnostic_layer)
+
+        if invalid_ind is not None:
+            interpreted_dswx_band[invalid_ind] = 255
+
+        if output_binary_water:
+            save_dswx_product(interpreted_dswx_band,
+                              output_binary_water,
+                              dswx_metadata_dict,
+                              geotransform,
+                              projection,
+                              description=band_description_dict['BWTR'],
+                              scratch_dir=scratch_dir,
+                              output_files_list=build_vrt_list)
+                            
+
+
+
         if output_confidence_layer:
             _save_array(hillshade, output_confidence_layer,
                         dswx_metadata_dict, geotransform, projection,
@@ -2467,6 +2789,9 @@ def generate_dswx_layers(input_list,
                         description=band_description_dict['CONF'],
                         output_files_list=build_vrt_list)
 
+        return
+        # end of DEBUG CODE !!!
+                        
 
         # remove extra margin from DEM
         dem = dem_with_margin[DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS,
@@ -2503,12 +2828,6 @@ def generate_dswx_layers(input_list,
             scratch_dir, landcover_mask_type, geotransform, projection,
             length, width, dswx_metadata_dict = dswx_metadata_dict,
             output_files_list=build_vrt_list)
-
-    # Set invalid pixels to fill value (255)
-    if not flag_offset_and_scale_inputs:
-        invalid_ind = np.where(blue < -5000)
-    else:
-        invalid_ind = np.where(blue < -0.5)
 
     if output_rgb_file:
         _save_output_rgb_file(red, green, blue, output_rgb_file,
@@ -2595,6 +2914,7 @@ def generate_dswx_layers(input_list,
                         output_files_list=build_vrt_list)
 
     binary_water_layer = _get_binary_water_layer(masked_dswx_band)
+    ''' TODO uncomment this:
     if output_binary_water:
         _save_binary_water(binary_water_layer, output_binary_water,
                            dswx_metadata_dict,
@@ -2604,7 +2924,6 @@ def generate_dswx_layers(input_list,
                            output_files_list=build_vrt_list)
 
     # TODO: fix CONF layer!!!
-    '''
     if output_confidence_layer:
         _save_binary_water(binary_water_layer, output_confidence_layer,
                            dswx_metadata_dict,
