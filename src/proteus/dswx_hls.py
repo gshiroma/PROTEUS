@@ -12,6 +12,7 @@ from ruamel.yaml import YAML as ruamel_yaml
 from osgeo.gdalconst import GDT_Float32
 from osgeo import gdal, osr
 from proteus.core import save_as_cog
+import traceback
 
 PRODUCT_VERSION = '0.1'
 
@@ -2771,13 +2772,19 @@ def generate_dswx_layers(input_list,
         # not_flat_mask = geometry_dict['not_flat_slope_mask']
 
         sun_zenith = np.radians(90 - sun_elevation_angle)
-        red_new, green_new, blue_new, nir_new, swir1_new, swir2_new = \
-            _plot_geometry(lia, sun_zenith, 'local_inc', not_flat_mask,
-                           red, green, blue,
-                           nir, swir1, swir2, qa,
-                           invalid_ind, scale_dict, offset_dict,
-                           geotransform, projection, flag_offset_and_scale_inputs,
-                           dswx_metadata_dict, output_dir, scratch_dir)
+        flag_error = False
+        try:
+            red_new, green_new, blue_new, nir_new, swir1_new, swir2_new = \
+                _plot_geometry(lia, sun_zenith, 'local_inc', not_flat_mask,
+                               red, green, blue,
+                               nir, swir1, swir2, qa,
+                               invalid_ind, scale_dict, offset_dict,
+                               geotransform, projection, flag_offset_and_scale_inputs,
+                               dswx_metadata_dict, output_dir, scratch_dir)
+        except:
+            error_message = traceback.format_exc()
+            logger.warning(error_message)
+            flag_error = True
 
         ''' 
         _plot_geometry(lia, sun_zenith, 'local_inc_db', not_flat_mask,
@@ -2805,24 +2812,28 @@ def generate_dswx_layers(input_list,
 
         '''
 
-        diagnostic_layer = _compute_diagnostic_tests(
-            blue_new, green_new, red_new, nir_new, swir1_new, swir2_new,
-            hls_thresholds)
+        if not flag_error:
+            logger.info('computing interpreted layer using terrain normalized'
+                        ' reflectance layers')
 
-        interpreted_dswx_band = generate_interpreted_layer(diagnostic_layer)
+            diagnostic_layer = _compute_diagnostic_tests(
+                blue_new, green_new, red_new, nir_new, swir1_new, swir2_new,
+                hls_thresholds)
 
-        if invalid_ind is not None:
-            interpreted_dswx_band[invalid_ind] = 255
+            interpreted_dswx_band = generate_interpreted_layer(diagnostic_layer)
 
-        if output_binary_water:
-            save_dswx_product(interpreted_dswx_band,
-                              output_binary_water,
-                              dswx_metadata_dict,
-                              geotransform,
-                              projection,
-                              description=band_description_dict['BWTR'],
-                              scratch_dir=scratch_dir,
-                              output_files_list=build_vrt_list)
+            if invalid_ind is not None:
+                interpreted_dswx_band[invalid_ind] = 255
+
+            if output_binary_water:
+                save_dswx_product(interpreted_dswx_band,
+                                  output_binary_water,
+                                  dswx_metadata_dict,
+                                  geotransform,
+                                  projection,
+                                  description=band_description_dict['BWTR'],
+                                  scratch_dir=scratch_dir,
+                                  output_files_list=build_vrt_list)
                             
 
 
