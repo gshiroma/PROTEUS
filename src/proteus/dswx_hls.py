@@ -1,3 +1,4 @@
+import sys
 import logging
 import tempfile
 import os
@@ -2188,6 +2189,43 @@ def _populate_dswx_metadata_datasets(dswx_metadata_dict, hls_dataset,
         worldcover_file if worldcover_file \
                                      else '(not provided)'
 
+class Logger(object):
+    """Class to redirect stdout and stderr to the logger
+    """
+    def __init__(self, logger, level, prefix=''):
+       self.logger = logger
+       self.level = level
+       self.prefix = prefix
+       self.buffer = ''
+
+    def write(self, message):
+
+        # Add message to the buffer until "\n" is found
+        if '\n' not in message:
+            self.buffer += message
+            return
+
+        message = self.buffer + message
+
+        # check if there is any character after the last \n
+        # if so, move it to the buffer
+        message_list = message.split('\n')
+        if not message.endswith('\n'):
+            self.buffer = message_list[-1]
+            message_list = message_list[:-1]
+        else:
+            self.buffer = ''
+
+        # print all characters before the last \n
+        for line in message_list:
+            if not line:
+                continue
+            self.logger.log(self.level, self.prefix + line)
+
+    def flush(self):
+        self.logger.log(self.level, self.buffer)
+        self.buffer = ''
+
 
 def create_logger(log_file, full_log_formatting=None):
     """Create logger object for a log file
@@ -2212,14 +2250,14 @@ def create_logger(log_file, full_log_formatting=None):
     ch.setLevel(logging.DEBUG)
 
     # create formatter
-    formatter = logging.Formatter('%(message)s')
-
     # configure full log format, if enabled
     if full_log_formatting:
         msgfmt = ('%(asctime)s.%(msecs)03d, %(levelname)s, DSWx-HLS, '
                   '%(module)s, 999999, %(pathname)s:%(lineno)d, "%(message)s"')
 
         formatter = logging.Formatter(msgfmt, "%Y-%m-%d %H:%M:%S")
+    else:
+        formatter = logging.Formatter('%(message)s')
 
     # add formatter to ch
     ch.setFormatter(formatter)
@@ -2234,6 +2272,9 @@ def create_logger(log_file, full_log_formatting=None):
 
         # add file handler to logger
         logger.addHandler(file_handler)
+
+    sys.stdout = Logger(logger, logging.INFO)
+    sys.stderr = Logger(logger, logging.ERROR, prefix='[StdErr] ')
 
     return logger
 
@@ -2725,7 +2766,6 @@ def generate_dswx_layers(input_list,
                 output_dtype=gdal.GDT_Float32,
                 scratch_dir=scratch_dir,
                 description=key)
-
 
         # lia = geometry_dict['local_inc_angle']
         # not_flat_mask = geometry_dict['not_flat_slope_mask']
