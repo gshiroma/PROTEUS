@@ -2396,7 +2396,6 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
     swir2 = scale_dict['swir2'] * (np.asarray(swir2, dtype=np.float32) -
                                offset_dict['swir2'])
 
-    '''
     red[invalid_ind] = np.nan
     green[invalid_ind] = np.nan
     blue[invalid_ind] = np.nan
@@ -2404,7 +2403,6 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
     swir1[invalid_ind] = np.nan
     swir2[invalid_ind] = np.nan
     ref_image[invalid_ind] = np.nan
-    '''
 
     # Masking out invalid pixels
     not_flat_mask[invalid_ind] = 0
@@ -2425,6 +2423,7 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
         swir1 = np.clip(20*np.log10(swir1), min_db, None)
         swir2 = np.clip(20*np.log10(swir2), min_db, None)
 
+
     dummy_offset_dict = {}
     dummy_offset_dict['red'] = 0
     dummy_offset_dict['green'] = 0
@@ -2441,12 +2440,14 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
     dummy_scale_dict['swir1'] = 1
     dummy_scale_dict['swir2'] = 1
 
+
     red = plant.PlantImage(red, name='Red')
     green = plant.PlantImage(green, name='Green')
     blue = plant.PlantImage(blue, name='Blue')
     nir = plant.PlantImage(nir, name='NIR')
     swir1 = plant.PlantImage(swir1, name='SWIR-1')
     swir2 = plant.PlantImage(swir2, name='SWIR-2')
+    ref_image_obj = plant.PlantImage(ref_image, name=ref_str)
 
     display_kwargs = {}
     if 'shaded_relief' in ref_str:
@@ -2456,7 +2457,7 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
     # trendplot (RGB)
     shadow_mask_plot_file = os.path.join(
         output_dir, 'shadow_mask', f'trendplot_rgb_vs_{ref_str}.png')
-    ret = plant.display(ref_image, red, green, blue, output_file=shadow_mask_plot_file,
+    ret = plant.display(ref_image_obj, red, green, blue, output_file=shadow_mask_plot_file,
                   mask_in=not_flat_mask, linfit=True, trendplot=True, force=True,
                   title=f'RGB reflectance vs {ref_str} angle', no_show=True,
                   **display_kwargs)
@@ -2464,7 +2465,7 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
         output_dir, 'shadow_mask', f'trendplot_infrared_vs_{ref_str}.png')
 
     # trendplot (infrared)
-    ret = plant.display(ref_image, nir, swir1, swir2, output_file=shadow_mask_plot_file,
+    ret = plant.display(ref_image_obj, nir, swir1, swir2, output_file=shadow_mask_plot_file,
                   mask_in=not_flat_mask, linfit=True, trendplot=True, force=True,
                   title=f'NISAR SWIR-1 SWIR-2 reflectance vs {ref_str} angle', no_show=True,
                   **display_kwargs)
@@ -2472,36 +2473,54 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
     # density plots (RGB)
     shadow_mask_plot_file = os.path.join(
         output_dir, 'shadow_mask', f'density_plot_red_vs_{ref_str}.png')
-    plant.display(ref_image, red, output_file=shadow_mask_plot_file,
+    plant.display(ref_image_obj, red, output_file=shadow_mask_plot_file,
                   density=True, mask_in=not_flat_mask, force=True, no_show=True,
                   title=f'Red reflectance vs {ref_str} angle', **display_kwargs)
     shadow_mask_plot_file = os.path.join(
         output_dir, 'shadow_mask', f'density_plot_green_vs_{ref_str}.png')
-    plant.display(ref_image, green, output_file=shadow_mask_plot_file,
+    plant.display(ref_image_obj, green, output_file=shadow_mask_plot_file,
                   density=True, mask_in=not_flat_mask, force=True, no_show=True,
                   title=f'Green reflectance vs {ref_str} angle', **display_kwargs)
     shadow_mask_plot_file = os.path.join(
         output_dir, 'shadow_mask', f'density_plot_blue_vs_{ref_str}.png')
-    plant.display(ref_image, blue, output_file=shadow_mask_plot_file,
+    plant.display(ref_image_obj, blue, output_file=shadow_mask_plot_file,
                   density=True, mask_in=not_flat_mask, force=True, no_show=True,
                   title=f'Blue reflectance vs {ref_str} angle', **display_kwargs)
 
     # RGB-color composite
     image_list = []
+    shaded_relief_list = []
     for i, image_obj in enumerate([red, green, blue]):
         print('line-fit coefficient: ', ret.linefit_dict['coeffs'][i])
         offset, slope = ret.linefit_dict['coeffs'][i]
         print('line-fit r2: ', ret.linefit_dict['r2'][i])
         print('line-fit RMSE: ', ret.linefit_dict['rmse'][i])
-        image = image_obj.image - slope * (ref_image - ref_value)
+        image = np.asarray(image_obj.image) - slope * (ref_image - ref_value)
+        shaded_relief_list.append(slope * (ref_image - ref_value))
         image = np.clip(image, 0, None)
         if flag_db:
             image = 10 ** (image/20)
         image_list.append(image)
 
+    # prepare output RGB
+    red = (image_list[0] + offset_dict['red']) / scale_dict['red']
+    green = (image_list[1] + offset_dict['green']) / scale_dict['green']
+    blue = (image_list[2] + offset_dict['blue']) / scale_dict['blue']
+
     rgb_file = os.path.join(output_dir, 'shadow_mask',
                             f'scaled_rgb_{ref_str}.tif')
-    _save_output_rgb_file(image_list[0], image_list[1], image_list[2], 
+    _save_output_rgb_file(red, green, blue, 
+                          rgb_file, offset_dict, scale_dict,
+                          flag_offset_and_scale_inputs,
+                          dswx_metadata_dict,
+                          geotransform, projection,
+                          invalid_ind=invalid_ind,
+                          scratch_dir=scratch_dir)
+
+    rgb_file = os.path.join(output_dir, 'shadow_mask',
+                            f'scaled_shaded_relief_rgb_{ref_str}.tif')
+    _save_output_rgb_file(shaded_relief_list[0], shaded_relief_list[1],
+                          shaded_relief_list[2], 
                           rgb_file, dummy_offset_dict, dummy_scale_dict,
                           flag_offset_and_scale_inputs,
                           dswx_metadata_dict,
@@ -2509,10 +2528,7 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
                           invalid_ind=invalid_ind,
                           scratch_dir=scratch_dir)
 
-    # prepare output RGB
-    red = (image_list[0] + offset_dict['red']) / scale_dict['red']
-    green = (image_list[1] + offset_dict['green']) / scale_dict['green']
-    blue = (image_list[2] + offset_dict['blue']) / scale_dict['blue']
+
 
     # Infrared-color composite
     image_list = []
@@ -2521,26 +2537,27 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
         offset, slope = ret.linefit_dict['coeffs'][i]
         print('line-fit r2: ', ret.linefit_dict['r2'][i])
         print('line-fit RMSE: ', ret.linefit_dict['rmse'][i])
-        image = image_obj.image - slope * (ref_image - ref_value)
+        image = np.asarray(image_obj.image) - slope * (ref_image - ref_value)
         image = np.clip(image, 0, None)
         if flag_db:
             image = 10 ** (image/20)
         image_list.append(image)
 
+    # prepare output infrared
+    nir = (image_list[0] + offset_dict['nir']) / scale_dict['nir']
+    swir1 = (image_list[1] + offset_dict['swir1']) / scale_dict['swir1']
+    swir2 = (image_list[2] + offset_dict['swir2']) / scale_dict['swir2']
+
     rgb_file = os.path.join(output_dir, 'shadow_mask',
                             f'scaled_nir_swir1_swir2_{ref_str}.tif')
-    _save_output_rgb_file(image_list[0], image_list[1], image_list[2], 
-                          rgb_file, dummy_offset_dict, dummy_scale_dict,
+
+    _save_output_rgb_file(nir, swir1, swir2, 
+                          rgb_file, offset_dict, scale_dict,
                           flag_offset_and_scale_inputs,
                           dswx_metadata_dict,
                           geotransform, projection,
                           invalid_ind=invalid_ind,
                           scratch_dir=scratch_dir)
-
-    # prepare output infrared
-    nir = (image_list[0] + offset_dict['nir']) / scale_dict['nir']
-    swir1 = (image_list[1] + offset_dict['swir1']) / scale_dict['swir1']
-    swir2 = (image_list[2] + offset_dict['swir2']) / scale_dict['swir2']
 
     return red, green, blue, nir, swir1, swir2            
 
@@ -2835,7 +2852,7 @@ def generate_dswx_layers(input_list,
                                   scratch_dir=scratch_dir,
                                   output_files_list=build_vrt_list)
                             
-
+        return
 
 
         if output_confidence_layer:
