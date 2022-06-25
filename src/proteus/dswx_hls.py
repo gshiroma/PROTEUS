@@ -2315,7 +2315,8 @@ def _compute_hillshade(dem_file, scratch_dir, sun_azimuth_angle,
 def _compute_slope(dem, sun_azimuth_angle, sun_elevation_angle,
                    pixel_spacing_x = 30, pixel_spacing_y = 30):
     sun_azimuth = np.radians(sun_azimuth_angle)
-    sun_zenith = np.radians(90 - sun_elevation_angle)
+    sun_zenith_degrees = 90 - sun_elevation_angle
+    sun_zenith = np.radians(sun_zenith_degrees)
 
     target_to_sun_unit_vector = [np.sin(sun_azimuth) * np.sin(sun_zenith),
                                  np.cos(sun_azimuth) * np.sin(sun_zenith),
@@ -2365,10 +2366,10 @@ def _compute_slope(dem, sun_azimuth_angle, sun_elevation_angle,
     # geometry_dict['directional_slope'] = directional_slope
     geometry_dict['directional_slope_angle'] = directional_slope_angle
     geometry_dict['backslope_mask'] = directional_slope_angle < -5
-    geometry_dict['flat_slope_mask'] = ((directional_slope_angle >= -5) &
-                                        (directional_slope_angle < 5))
-    geometry_dict['not_flat_slope_mask'] = ((directional_slope_angle < -5) |
-                                            (directional_slope_angle >= 5))
+    geometry_dict['flat_slope_mask'] = np.abs(directional_slope_angle) >= 5
+    geometry_dict['not_flat_slope_mask'] = ((np.abs(directional_slope_angle) >= 5) &
+                                            (np.abs(local_inc_angle_degrees -
+                                                    sun_zenith_degrees) >= 5))
     geometry_dict['foreslope_mask'] = directional_slope_angle >= 5
     geometry_dict['low_local_inc_angle_mask'] = local_inc_angle_degrees <= 40
     geometry_dict['shadow_mask'] = (geometry_dict['low_local_inc_angle_mask'] |
@@ -2389,6 +2390,17 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
     import plant
     import scipy
 
+
+    rgb_file = os.path.join(output_dir, 'shadow_mask',
+                            f'2_original_nir_swir1_swir2_{ref_str}.tif')
+    _save_output_rgb_file(nir, swir1, swir2, 
+                          rgb_file, offset_dict, scale_dict,
+                          flag_offset_and_scale_inputs,
+                          dswx_metadata_dict,
+                          geotransform, projection,
+                          invalid_ind=invalid_ind,
+                          scratch_dir=scratch_dir)
+
     red = scale_dict['red'] * (np.asarray(red, dtype=np.float32) -
                                offset_dict['red'])
     green = scale_dict['green'] * (np.asarray(green, dtype=np.float32) -
@@ -2402,22 +2414,42 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
     swir2 = scale_dict['swir2'] * (np.asarray(swir2, dtype=np.float32) -
                                offset_dict['swir2'])
 
-    '''
-    red[invalid_ind] = np.nan
-    green[invalid_ind] = np.nan
-    blue[invalid_ind] = np.nan
-    nir[invalid_ind] = np.nan
-    swir1[invalid_ind] = np.nan
-    swir2[invalid_ind] = np.nan
-    ref_image[invalid_ind] = np.nan
-    '''
-
     # Masking out invalid pixels
     not_flat_mask[invalid_ind] = 0
 
     # Q/A masking
     qa_invalid_ind = np.where((qa % 64) != 0)
     not_flat_mask[qa_invalid_ind] = 0
+    '''
+    red[qa_invalid_ind] = np.nan
+    green[qa_invalid_ind] = np.nan
+    blue[qa_invalid_ind] = np.nan
+    nir[qa_invalid_ind] = np.nan
+    swir1[qa_invalid_ind] = np.nan
+    swir2[qa_invalid_ind] = np.nan
+    ref_image[qa_invalid_ind] = np.nan
+
+    rgb_file = os.path.join(output_dir, 'shadow_mask',
+                            f'1_original_cloud_masked_rgb_{ref_str}.tif')
+    _save_output_rgb_file(red, green, blue, 
+                          rgb_file, offset_dict, scale_dict,
+                          flag_offset_and_scale_inputs,
+                          dswx_metadata_dict,
+                          geotransform, projection,
+                          invalid_ind=invalid_ind,
+                          scratch_dir=scratch_dir)
+
+    rgb_file = os.path.join(output_dir, 'shadow_mask',
+                            f'2_original_cloud_masked_nir_swir1_swir2_{ref_str}.tif')
+
+    _save_output_rgb_file(nir, swir1, swir2, 
+                          rgb_file, offset_dict, scale_dict,
+                          flag_offset_and_scale_inputs,
+                          dswx_metadata_dict,
+                          geotransform, projection,
+                          invalid_ind=invalid_ind,
+                          scratch_dir=scratch_dir)
+    '''
 
     # Binary erosion
     not_flat_mask = scipy.ndimage.morphology.binary_erosion(not_flat_mask)
@@ -2466,26 +2498,27 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
 
     # trendplot (RGB)
     shadow_mask_plot_file = os.path.join(
-        output_dir, 'shadow_mask', f'trendplot_rgb_vs_{ref_str}.png')
+        output_dir, 'shadow_mask', f'4_trendplot_rgb_vs_{ref_str}.png')
     ret = plant.display(ref_image_obj, red, green, blue, output_file=shadow_mask_plot_file,
-                  mask_in=not_flat_mask, ffit='poly4', trendplot=True, force=True,
+                  mask_in=not_flat_mask, ffit='poly4', mean=True,
+                  trendplot=True, force=True,
                   title=f'RGB reflectance vs {ref_str} angle', no_show=True,
                   **display_kwargs)
 
 
     # density plots (RGB)
     shadow_mask_plot_file = os.path.join(
-        output_dir, 'shadow_mask', f'density_plot_red_vs_{ref_str}.png')
+        output_dir, 'shadow_mask', f'3_density_plot_red_vs_{ref_str}.png')
     plant.display(ref_image_obj, red, output_file=shadow_mask_plot_file,
                   density=True, mask_in=not_flat_mask, force=True, no_show=True,
                   title=f'Red reflectance vs {ref_str} angle', **display_kwargs)
     shadow_mask_plot_file = os.path.join(
-        output_dir, 'shadow_mask', f'density_plot_green_vs_{ref_str}.png')
+        output_dir, 'shadow_mask', f'3_density_plot_green_vs_{ref_str}.png')
     plant.display(ref_image_obj, green, output_file=shadow_mask_plot_file,
                   density=True, mask_in=not_flat_mask, force=True, no_show=True,
                   title=f'Green reflectance vs {ref_str} angle', **display_kwargs)
     shadow_mask_plot_file = os.path.join(
-        output_dir, 'shadow_mask', f'density_plot_blue_vs_{ref_str}.png')
+        output_dir, 'shadow_mask', f'3_density_plot_blue_vs_{ref_str}.png')
     plant.display(ref_image_obj, blue, output_file=shadow_mask_plot_file,
                   density=True, mask_in=not_flat_mask, force=True, no_show=True,
                   title=f'Blue reflectance vs {ref_str} angle', **display_kwargs)
@@ -2519,7 +2552,8 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
         '''
         # shaded_relief_list.append(y)
         if shadows_only:
-            ind = np.where(y > y_ref)
+            # ind = np.where(y > y_ref)
+            ind = np.where(ref_image < ref_value)
             y[ind] = y_ref
         if multiplicative_model:
             image = (image_obj.image / y) * y_ref
@@ -2536,7 +2570,7 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
     blue = (image_list[2] + offset_dict['blue']) / scale_dict['blue']
 
     rgb_file = os.path.join(output_dir, 'shadow_mask',
-                            f'scaled_rgb_{ref_str}.tif')
+                            f'1_scaled_rgb_{ref_str}.tif')
     _save_output_rgb_file(red, green, blue, 
                           rgb_file, offset_dict, scale_dict,
                           flag_offset_and_scale_inputs,
@@ -2550,9 +2584,10 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
 
     # trendplot (RGB)
     shadow_mask_plot_file = os.path.join(
-        output_dir, 'shadow_mask', f'trendplot_red_{ref_str}_after.png')
+        output_dir, 'shadow_mask', f'5_trendplot_red_{ref_str}_after.png')
     ret = plant.display(ref_image_obj, red_orig, red_new, output_file=shadow_mask_plot_file,
-                  mask_in=not_flat_mask, linfit=True, trendplot=True, force=True,
+                  mask_in=not_flat_mask, linfit=True, mean=True,
+                  trendplot=True, force=True,
                   title=f'RGB reflectance vs {ref_str} angle', no_show=True,
                   **display_kwargs)
 
@@ -2570,11 +2605,12 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
                           '''
 
     shadow_mask_plot_file = os.path.join(
-        output_dir, 'shadow_mask', f'trendplot_infrared_vs_{ref_str}.png')
+        output_dir, 'shadow_mask', f'4_trendplot_infrared_vs_{ref_str}.png')
 
     # trendplot (infrared)
     ret = plant.display(ref_image_obj, nir, swir1, swir2, output_file=shadow_mask_plot_file,
-                  mask_in=not_flat_mask, ffit='poly4', trendplot=True, force=True,
+                  mask_in=not_flat_mask, ffit='poly4', mean=True,
+                  trendplot=True, force=True,
                   title=f'NISAR SWIR-1 SWIR-2 reflectance vs {ref_str} angle', no_show=True,
                   **display_kwargs)
 
@@ -2597,7 +2633,8 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
             y_ref += coeff * (x_ref ** i)
 
         if shadows_only:
-            ind = np.where(y > y_ref)
+            # ind = np.where(y > y_ref)
+            ind = np.where(ref_image < ref_value)
             y[ind] = y_ref
 
         if multiplicative_model:
@@ -2619,7 +2656,7 @@ def _plot_geometry(ref_image, ref_value, ref_str, not_flat_mask, red, green, blu
     swir2 = (image_list[2] + offset_dict['swir2']) / scale_dict['swir2']
 
     rgb_file = os.path.join(output_dir, 'shadow_mask',
-                            f'scaled_nir_swir1_swir2_{ref_str}.tif')
+                            f'2_scaled_nir_swir1_swir2_{ref_str}.tif')
 
     _save_output_rgb_file(nir, swir1, swir2, 
                           rgb_file, offset_dict, scale_dict,
@@ -2844,8 +2881,8 @@ def generate_dswx_layers(input_list,
                         DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS]
             if key == 'local_inc_angle':
                 lia = image
-            elif key == 'shaded_relief':
-                shaded_relief = image
+            # elif key == 'shaded_relief':
+            #     shaded_relief = image
             elif key == 'not_flat_slope_mask':
                 not_flat_mask = image
             current_output_file = os.path.join(output_dir, 'shadow_mask', key+'.tif')
