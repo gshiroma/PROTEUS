@@ -585,7 +585,8 @@ def _update_landcover_array(conglomerate_array, agg_sum, threshold,
 def create_landcover_mask(copernicus_landcover_file,
                           worldcover_file, output_file, scratch_dir,
                           mask_type, geotransform, projection, length, width,
-                          dswx_metadata_dict = {}, output_files_list = None):
+                          dswx_metadata_dict = {}, output_files_list = None,
+                          temp_files_list = None):
     """
     Create landcover mask LAND combining Copernicus Global Land Service
     (CGLS) Land Cover Layers collection 3 at 100m and ESA WorldCover 10m.
@@ -615,6 +616,8 @@ def create_landcover_mask(copernicus_landcover_file,
               Metadata dictionary that will store band metadata 
        output_files_list: list
               Mutable list of output files
+       temp_files_list: list (optional)
+              Mutable list of temporary files
     """
     if not os.path.isfile(copernicus_landcover_file):
         logger.error(f'ERROR file not found: {copernicus_landcover_file}')
@@ -633,7 +636,8 @@ def create_landcover_mask(copernicus_landcover_file,
     copernicus_landcover_array = _relocate(copernicus_landcover_file,
         geotransform, projection,
         length, width, scratch_dir, resample_algorithm='nearest',
-        relocated_file=copernicus_landcover_reprojected_file)
+        relocated_file=copernicus_landcover_reprojected_file,
+        temp_files_list=temp_files_list)
 
     # Reproject ESA Worldcover 10m
     geotransform_up_3 = list(geotransform)
@@ -646,7 +650,8 @@ def create_landcover_mask(copernicus_landcover_file,
     worldcover_array_up_3 = _relocate(worldcover_file, geotransform_up_3,
         projection, length_up_3, width_up_3, scratch_dir,
         resample_algorithm='nearest',
-        relocated_file=worldcover_reprojected_up_3_file)
+        relocated_file=worldcover_reprojected_up_3_file,
+        temp_files_list=temp_files_list)
 
     # Set multilooking parameters
     size_y = 3
@@ -1652,10 +1657,12 @@ def _collapse_wtr_classes(interpreted_layer):
         collapsed_interpreted_layer[ind] = new_value
     return collapsed_interpreted_layer
 
+
 def save_dswx_product(wtr, output_file, dswx_metadata_dict, geotransform,
                       projection, scratch_dir='.', output_files_list = None,
+                      description = None,
                       flag_collapse_wtr_classes = FLAG_COLLAPSE_WTR_CLASSES,
-                      description = None, **dswx_processed_bands):
+                      **dswx_processed_bands):
     """Save DSWx-HLS product
 
        Parameters
@@ -2060,7 +2067,8 @@ def get_projection_proj4(projection):
 def _relocate(input_file, geotransform, projection,
               length, width, scratch_dir = '.',
               resample_algorithm='nearest',
-              relocated_file=None, margin_in_pixels=0):
+              relocated_file=None, margin_in_pixels=0,
+              temp_files_list=None):
     """Relocate/reproject a file (e.g., landcover or DEM) based on geolocation
        defined by a geotransform, output dimensions (length and width)
        and projection
@@ -3000,6 +3008,7 @@ def generate_dswx_layers(input_list,
     offset_dict = {}
     scale_dict = {}
     output_files_list = []
+    temp_files_list = []
     build_vrt_list = []
     dem = None
     shadow_layer = None
@@ -3087,10 +3096,12 @@ def generate_dswx_layers(input_list,
                                     length, width, scratch_dir,
                                     resample_algorithm='cubic',
                                     relocated_file=dem_cropped_file,
-                                    margin_in_pixels=DEM_MARGIN_IN_PIXELS)
+                                    margin_in_pixels=DEM_MARGIN_IN_PIXELS,
+                                    temp_files_list=temp_files_list)
 
         hillshade = _compute_hillshade(dem_cropped_file, scratch_dir,
-                                       sun_azimuth_angle, sun_elevation_angle)
+                                       sun_azimuth_angle, sun_elevation_angle,
+                                       temp_files_list=temp_files_list)
         shadow_layer_with_margin = _compute_otsu_threshold(hillshade, is_normalized = True)
 
 
@@ -3239,7 +3250,7 @@ def generate_dswx_layers(input_list,
             landcover_file, worldcover_file, output_landcover,
             scratch_dir, landcover_mask_type, geotransform, projection,
             length, width, dswx_metadata_dict = dswx_metadata_dict,
-            output_files_list=build_vrt_list)
+            output_files_list=build_vrt_list, temp_files_list=temp_files_list)
 
     if output_rgb_file:
         _save_output_rgb_file(red, green, blue, output_rgb_file,
@@ -3383,9 +3394,16 @@ def generate_dswx_layers(input_list,
         build_vrt_list.append(output_file)
         logger.info(f'file saved: {output_file}')
 
-    logger.info('list of output files:')
+    logger.info('removing temporary files:')
+    for filename in temp_files_list:
+        if not os.path.isfile(filename):
+            continue
+        os.remove(filename)
+        logger.info(f'    {filename}')
+
+    logger.info('output files:')
     for filename in build_vrt_list + output_files_list:
-        logger.info(filename)
+        logger.info(f'    {filename}')
 
     return True
 
