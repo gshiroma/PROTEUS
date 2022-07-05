@@ -154,8 +154,7 @@ layer_names_to_args_dict = {
     'INFRARED_RGB': 'output_infrared_rgb_file'}
 
 
-METADATA_FIELDS_TO_COPY_FROM_HLS_LIST = ['SENSING_TIME',
-                                         'SPATIAL_COVERAGE',
+METADATA_FIELDS_TO_COPY_FROM_HLS_LIST = ['SPATIAL_COVERAGE',
                                          'CLOUD_COVERAGE',
                                          'MEAN_SUN_AZIMUTH_ANGLE',
                                          'MEAN_SUN_ZENITH_ANGLE',
@@ -1285,6 +1284,41 @@ def _compute_mask_and_filter_interpreted_layer(
     return mask, masked_interpreted_water_layer
 
 
+def _get_avg_sensing_time(sensing_time_str):
+    """Compute average sensing time
+
+       Parameters
+       ----------
+       sensing_time_str: str
+              String containing the list of sensing times separated by ";"
+
+       Returns
+       -------
+       average_sensing_time_string: str
+              Average sensing time
+    """
+    sensing_time_list = [d.strip() for d in
+                         sensing_time_str.split(';')]
+
+    if len(sensing_time_list) == 1:
+        return sensing_time_list[0]
+
+    timestamp_sum = 0
+    for sensing_time in sensing_time_list:
+        # datetime parses microseconds but not nanoseconds
+        sensing_time_splitted = sensing_time.split('.')
+        sensing_time_splitted[1] = sensing_time_splitted[1][0:6]
+        sensing_time_microseconds = '.'.join(
+            sensing_time_splitted)+'Z'
+        dt_object = datetime.datetime.strptime(
+            sensing_time_microseconds, "%Y-%m-%dT%H:%M:%S.%fZ")
+        timestamp_sum += dt_object.timestamp()
+    timestamp_avg = timestamp_sum / len(sensing_time_list)
+    datetime_avg = datetime.datetime.fromtimestamp(timestamp_avg)
+    datetime_avg_str = datetime_avg.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return datetime_avg_str
+
+
 def _load_hls_from_file(filename, image_dict, offset_dict, scale_dict,
                         dswx_metadata_dict, key,
                         flag_offset_and_scale_inputs, flag_debug = False,
@@ -1341,7 +1375,10 @@ def _load_hls_from_file(filename, image_dict, offset_dict, scale_dict,
             elif (k.upper() == 'LANDSAT_PRODUCT_ID' or
                     k.upper() == 'PRODUCT_URI'):
                 dswx_metadata_dict['SENSOR_PRODUCT_ID'] = v
-
+            elif k.upper() == 'SENSING_TIME':
+                dswx_metadata_dict['SENSING_TIME'] = \
+                    _get_avg_sensing_time(v)
+                 
         sensor = None
 
         # HLS Sentinel metadata contain attribute SPACECRAFT_NAME
@@ -1616,6 +1653,7 @@ def _collapse_wtr_classes(interpreted_layer):
     return collapsed_interpreted_layer
 
 def save_dswx_product(wtr, output_file, dswx_metadata_dict, geotransform,
+                      projection, scratch_dir='.', output_files_list = None,
                       flag_collapse_wtr_classes = FLAG_COLLAPSE_WTR_CLASSES,
                       description = None, **dswx_processed_bands):
     """Save DSWx-HLS product
@@ -2298,7 +2336,7 @@ def _get_dswx_metadata_dict(product_id):
 
     # save datetime 'YYYY-MM-DD HH:MM:SS'
     dswx_metadata_dict['PROCESSING_DATETIME'] = \
-        datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     return dswx_metadata_dict
 
