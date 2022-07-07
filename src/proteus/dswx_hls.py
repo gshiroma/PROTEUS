@@ -2467,7 +2467,7 @@ def create_logger(log_file, full_log_formatting=None):
 
 
 def _compute_hillshade(dem_file, scratch_dir, sun_azimuth_angle,
-                      sun_elevation_angle):
+                      sun_elevation_angle, temp_files_list = None):
     """Compute hillshade using GDAL's DEMProcessing() function
 
        Parameters
@@ -2480,6 +2480,8 @@ def _compute_hillshade(dem_file, scratch_dir, sun_azimuth_angle,
               Sun azimuth angle
        sun_elevation_angle: float
               Sun elevation angle
+       temp_files_list: list (optional)
+              Mutable list of temporary files
 
        Returns
        -------
@@ -2488,6 +2490,8 @@ def _compute_hillshade(dem_file, scratch_dir, sun_azimuth_angle,
     """
     shadow_layer_file = tempfile.NamedTemporaryFile(
         dir=scratch_dir, suffix='.tif').name
+    if temp_files_list is not None:
+        temp_files_list.append(shadow_layer_file)
 
     gdal.DEMProcessing(shadow_layer_file, dem_file, "hillshade",
                       azimuth=sun_azimuth_angle,
@@ -3088,6 +3092,9 @@ def generate_dswx_layers(input_list,
     logger.info(f'Mean Sun azimuth angle: {sun_azimuth_angle}')
     logger.info(f'Mean Sun elevation angle: {sun_elevation_angle}')
 
+    flag_error = False
+    shadow_mask = None
+
     if dem_file is not None:
         # DEM
         dem_cropped_file = tempfile.NamedTemporaryFile(
@@ -3127,6 +3134,8 @@ def generate_dswx_layers(input_list,
             #     shaded_relief = image
             elif key == 'not_flat_slope_mask':
                 not_flat_mask = image
+            elif key == 'shadow_mask':
+                shadow_mask = image
             current_output_file = os.path.join(output_dir, 'shadow_mask', key+'.tif')
             _save_array(image, current_output_file,
                 dswx_metadata_dict, geotransform, projection,
@@ -3138,7 +3147,6 @@ def generate_dswx_layers(input_list,
         # not_flat_mask = geometry_dict['not_flat_slope_mask']
 
         sun_zenith = 90 - sun_elevation_angle
-        flag_error = False
         try:
             red_new, green_new, blue_new, nir_new, swir1_new, swir2_new = \
                 _plot_geometry(lia, sun_zenith, 'local_inc', not_flat_mask,
@@ -3176,7 +3184,7 @@ def generate_dswx_layers(input_list,
                        invalid_ind, scale_dict, offset_dict,
                        geotransform, projection, flag_offset_and_scale_inputs,
                        dswx_metadata_dict, output_dir, scratch_dir, flag_db=True)
-        '''
+
 
         if not flag_error:
             logger.info('computing interpreted layer using terrain normalized'
@@ -3200,7 +3208,7 @@ def generate_dswx_layers(input_list,
                                   description=band_description_dict['BWTR'],
                                   scratch_dir=scratch_dir,
                                   output_files_list=build_vrt_list)
-                            
+        '''
 
         if output_confidence_layer:
             _save_array(hillshade, output_confidence_layer,
@@ -3318,6 +3326,30 @@ def generate_dswx_layers(input_list,
                           description=band_description_dict['WTR-2'],
                           scratch_dir=scratch_dir,
                           output_files_list=build_vrt_list)
+
+
+
+
+
+    # TEST CODE!!!
+    if not flag_error:
+        landcover_shadow_masked_dswx_other = _apply_landcover_and_shadow_masks(
+            interpreted_dswx_band, nir, landcover_mask, shadow_mask)
+
+        if output_binary_water is not None:
+            save_dswx_product(landcover_shadow_masked_dswx_other,
+                              output_binary_water,
+                              dswx_metadata_dict,
+                              geotransform,
+                              projection,
+                              description=band_description_dict['BWTR'],
+                              scratch_dir=scratch_dir,
+                              output_files_list=build_vrt_list)
+
+
+
+
+
 
     cloud, masked_dswx_band = _compute_mask_and_filter_interpreted_layer(
         landcover_shadow_masked_dswx, qa)
