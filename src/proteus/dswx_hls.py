@@ -840,14 +840,15 @@ def _apply_landcover_and_shadow_masks(interpreted_layer, nir,
     # apply shadow mask - shadows are set to 0 (not water)
     if shadow_layer is not None and landcover_mask is None:
         logger.info('applying shadow mask:')
-        to_mask_ind = np.where(shadow_layer == 0 &
-            ((interpreted_layer == 1) | (interpreted_layer == 2)))
+        to_mask_ind = np.where((shadow_layer == 0) &
+            ((interpreted_layer >= 1) | (interpreted_layer <= 4)))
         landcover_shadow_masked_dswx[to_mask_ind] = 0
 
     elif shadow_layer is not None:
+        logger.info('applying shadow mask (with landcover):')
         to_mask_ind = np.where((shadow_layer == 0) &
             (~_is_landcover_class_water_or_wetland(landcover_mask)) &
-            ((interpreted_layer == 1) | (interpreted_layer == 2)))
+            ((interpreted_layer >= 1) & (interpreted_layer <= 4)))
         landcover_shadow_masked_dswx[to_mask_ind] = 0
 
     if landcover_mask is None:
@@ -858,19 +859,21 @@ def _apply_landcover_and_shadow_masks(interpreted_layer, nir,
     # Check landcover (evergreen)
     to_mask_ind = np.where(
         _is_landcover_class_evergreen(landcover_mask) &
-        (nir > landcover_nir_threshold) & (interpreted_layer == 2))
+        (nir > landcover_nir_threshold) & ((interpreted_layer == 3) |
+                                           (interpreted_layer == 4)))
     landcover_shadow_masked_dswx[to_mask_ind] = 0
 
     # Check landcover (low intensity developed)
     to_mask_ind = np.where(
         _is_landcover_class_low_intensity_developed(landcover_mask) &
-        (nir > landcover_nir_threshold) & (interpreted_layer == 2))
+        (nir > landcover_nir_threshold) & ((interpreted_layer == 3) |
+                                           (interpreted_layer == 4)))
     landcover_shadow_masked_dswx[to_mask_ind] = 0
 
     # Check landcover (high intensity developed)
     to_mask_ind = np.where(
         _is_landcover_class_high_intensity_developed(landcover_mask) &
-        ((interpreted_layer == 1) | (interpreted_layer == 2)))
+        ((interpreted_layer >= 1) & (interpreted_layer <= 4)))
     landcover_shadow_masked_dswx[to_mask_ind] = 0
 
     return landcover_shadow_masked_dswx
@@ -3125,6 +3128,7 @@ def generate_dswx_layers(input_list,
         output_dir = os.path.dirname(output_interpreted_band)
         print('output directory:', output_dir)
  
+        binary_mask_ctable = _get_binary_mask_ctable()
         for key in geometry_dict.keys():        
             image = geometry_dict[key][DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS,
                         DEM_MARGIN_IN_PIXELS:-DEM_MARGIN_IN_PIXELS]
@@ -3137,11 +3141,19 @@ def generate_dswx_layers(input_list,
             elif key == 'shadow_mask':
                 shadow_mask = image
             current_output_file = os.path.join(output_dir, 'shadow_mask', key+'.tif')
+
+            save_array_options = {} 
+            if 'mask' in key:
+                save_array_options['ctable'] = binary_mask_ctable
+                save_array_options['output_dtype'] = gdal.GDT_Byte
+            else:
+                save_array_options['output_dtype'] = gdal.GDT_Float32
+
             _save_array(image, current_output_file,
                 dswx_metadata_dict, geotransform, projection,
-                output_dtype=gdal.GDT_Float32,
                 scratch_dir=scratch_dir,
-                description=key)
+                description=key,
+                **save_array_options)
 
         # lia = geometry_dict['local_inc_angle']
         # not_flat_mask = geometry_dict['not_flat_slope_mask']
@@ -3185,6 +3197,7 @@ def generate_dswx_layers(input_list,
                        geotransform, projection, flag_offset_and_scale_inputs,
                        dswx_metadata_dict, output_dir, scratch_dir, flag_db=True)
 
+        '''
 
         if not flag_error:
             logger.info('computing interpreted layer using terrain normalized'
@@ -3198,17 +3211,18 @@ def generate_dswx_layers(input_list,
 
             if invalid_ind is not None:
                 interpreted_dswx_band[invalid_ind] = 255
+            
+            current_output_file = os.path.join(output_dir, 'shadow_mask', 'B05_WTR-1.tif')
 
             if output_binary_water:
                 save_dswx_product(interpreted_dswx_band,
-                                  output_binary_water,
+                                  current_output_file,
                                   dswx_metadata_dict,
                                   geotransform,
                                   projection,
                                   description=band_description_dict['BWTR'],
                                   scratch_dir=scratch_dir,
                                   output_files_list=build_vrt_list)
-        '''
 
         if output_confidence_layer:
             _save_array(hillshade, output_confidence_layer,
@@ -3332,19 +3346,19 @@ def generate_dswx_layers(input_list,
 
 
     # TEST CODE!!!
-    if not flag_error:
+    if (not flag_error and shadow_mask is not None
+            and output_binary_water is not None):
         landcover_shadow_masked_dswx_other = _apply_landcover_and_shadow_masks(
             interpreted_dswx_band, nir, landcover_mask, shadow_mask)
 
-        if output_binary_water is not None:
-            save_dswx_product(landcover_shadow_masked_dswx_other,
-                              output_binary_water,
-                              dswx_metadata_dict,
-                              geotransform,
-                              projection,
-                              description=band_description_dict['BWTR'],
-                              scratch_dir=scratch_dir,
-                              output_files_list=build_vrt_list)
+        save_dswx_product(landcover_shadow_masked_dswx_other,
+                          output_binary_water,
+                          dswx_metadata_dict,
+                          geotransform,
+                          projection,
+                          description=band_description_dict['BWTR'],
+                          scratch_dir=scratch_dir,
+                          output_files_list=build_vrt_list)
 
 
 
