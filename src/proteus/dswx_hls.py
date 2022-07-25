@@ -126,7 +126,6 @@ wtr_confidence_non_collapsed_dict = {
 
 collapsable_layers_list = ['WTR', 'WTR-1', 'WTR-2']
 
-
 band_description_dict = {
     'WTR': 'Water classification (WTR)',
     'BWTR': 'Binary Water (BWTR)',
@@ -614,7 +613,7 @@ def create_landcover_mask(copernicus_landcover_file,
               DSWx-HLS product's width (number of columns)
        dswx_metadata_dict: dict (optional)
               Metadata dictionary that will store band metadata 
-       output_files_list: list
+       output_files_list: list (optional)
               Mutable list of output files
        temp_files_list: list (optional)
               Mutable list of temporary files
@@ -1083,7 +1082,7 @@ def _get_binary_water_layer(interpreted_water_layer):
 
        Parameters
        ----------
-       masked_dswx_band: numpy.ndarray
+       interpreted_water_layer: numpy.ndarray
               Interpreted water layer
 
        Returns
@@ -1225,7 +1224,7 @@ def _compute_diagnostic_tests(blue, green, red, nir, swir1, swir2,
                    (swir2 < hls_thresholds.pswt_2_swir2) &
                    (nir < hls_thresholds.pswt_2_nir))
     diagnostic_layer[ind] += 16
-
+   
     return diagnostic_layer
 
 
@@ -1390,7 +1389,6 @@ def _load_hls_from_file(filename, image_dict, offset_dict, scale_dict,
             elif k.upper() == 'SENSING_TIME':
                 dswx_metadata_dict['SENSING_TIME'] = \
                     _get_avg_sensing_time(v)
-                 
         sensor = None
 
         # HLS Sentinel metadata contain attribute SPACECRAFT_NAME
@@ -1576,7 +1574,6 @@ def _load_hls_product_v2(file_list, image_dict, offset_dict,
             return False
 
     return True
-
 
 def _get_binary_mask_ctable():
     """
@@ -2078,7 +2075,7 @@ def _relocate(input_file, geotransform, projection,
               length, width, scratch_dir = '.',
               resample_algorithm='nearest',
               relocated_file=None, margin_in_pixels=0,
-              temp_files_list=None):
+              temp_files_list = None):
     """Relocate/reproject a file (e.g., landcover or DEM) based on geolocation
        defined by a geotransform, output dimensions (length and width)
        and projection
@@ -2105,6 +2102,8 @@ def _relocate(input_file, geotransform, projection,
               Relocated file (output file)
        margin_in_pixels: int
               Margin in pixels (default: 0)
+       temp_files_list: list (optional)
+              Mutable list of temporary files
 
        Returns
        -------
@@ -2126,6 +2125,8 @@ def _relocate(input_file, geotransform, projection,
                     dir=scratch_dir, suffix='.tif').name
         logger.info(f'relocating file: {input_file} to'
                     f' temporary file: {relocated_file}')
+        if temp_files_list is not None:
+            temp_files_list.append(relocated_file)
     else:
         logger.info(f'relocating file: {input_file} to'
                     f' file: {relocated_file}')
@@ -2428,6 +2429,48 @@ class Logger(object):
         self.buffer = ''
 
 
+class Logger(object):
+    """
+    Class to redirect stdout and stderr to the logger
+    """
+    def __init__(self, logger, level, prefix=''):
+       """
+       Class constructor
+       """
+       self.logger = logger
+       self.level = level
+       self.prefix = prefix
+       self.buffer = ''
+
+    def write(self, message):
+
+        # Add message to the buffer until "\n" is found
+        if '\n' not in message:
+            self.buffer += message
+            return
+
+        message = self.buffer + message
+
+        # check if there is any character after the last \n
+        # if so, move it to the buffer
+        message_list = message.split('\n')
+        if not message.endswith('\n'):
+            self.buffer = message_list[-1]
+            message_list = message_list[:-1]
+        else:
+            self.buffer = ''
+
+        # print all characters before the last \n
+        for line in message_list:
+            if not line:
+                continue
+            self.logger.log(self.level, self.prefix + line)
+
+    def flush(self):
+        self.logger.log(self.level, self.buffer)
+        self.buffer = ''
+
+
 def create_logger(log_file, full_log_formatting=None):
     """Create logger object for a log file
 
@@ -2478,7 +2521,6 @@ def create_logger(log_file, full_log_formatting=None):
     sys.stderr = Logger(logger, logging.ERROR, prefix='[StdErr] ')
 
     return logger
-
 
 def _compute_hillshade(dem_file, scratch_dir, sun_azimuth_angle,
                       sun_elevation_angle, temp_files_list = None):
@@ -2889,33 +2931,6 @@ def _binary_repr(diagnostic_layer_decimal):
               Diagnostic layer in binary representation
     """
 
-    nbits = 5
-    diagnostic_layer_binary = np.zeros_like(diagnostic_layer_decimal,
-                                            dtype=np.uint8)
-
-    for i in range(nbits):
-        diagnostic_layer_decimal, bit_array = \
-            np.divmod(diagnostic_layer_decimal, 2)
-        diagnostic_layer_binary += bit_array * (10 ** i)
-    
-    return diagnostic_layer_binary
-
-
-def _binary_repr(diagnostic_layer_decimal):
-    """Return the binary representation of the diagnostic layer in decimal
-    representation.
-
-       Parameters
-       ----------
-       diagnostic_layer_decimal: np.ndarray
-              Diagnostic layer in decimal representation
-
-       Returns
-       -------
-       diagnostic_layer_binary: np.ndarray
-              Diagnostic layer in binary representation
-    """
-
     nbits = 6
     diagnostic_layer_binary = np.zeros_like(diagnostic_layer_decimal,
                                             dtype=np.uint16)
@@ -3026,6 +3041,7 @@ def generate_dswx_layers(input_list,
     image_dict = {}
     offset_dict = {}
     scale_dict = {}
+    temp_files_list = []
     output_files_list = []
     temp_files_list = []
     build_vrt_list = []
@@ -3114,6 +3130,8 @@ def generate_dswx_layers(input_list,
         # DEM
         dem_cropped_file = tempfile.NamedTemporaryFile(
             dir=scratch_dir, suffix='.tif').name
+        if temp_files_list is not None:
+            temp_files_list.append(dem_cropped_file)
         dem_with_margin = _relocate(dem_file, geotransform, projection,
                                     length, width, scratch_dir,
                                     resample_algorithm='cubic',
@@ -3123,7 +3141,7 @@ def generate_dswx_layers(input_list,
 
         hillshade = _compute_hillshade(dem_cropped_file, scratch_dir,
                                        sun_azimuth_angle, sun_elevation_angle,
-                                       temp_files_list=temp_files_list)
+                                       temp_files_list = temp_files_list)
         shadow_layer_with_margin = _compute_otsu_threshold(hillshade, is_normalized = True)
 
 
