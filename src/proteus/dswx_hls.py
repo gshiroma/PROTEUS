@@ -689,7 +689,7 @@ def create_landcover_mask(copernicus_landcover_file,
     landcover_fill_value = \
         dswx_hls_landcover_classes_dict['fill_value']
     hierarchy_combined = np.full(h20_aggregate_sum.reshape(-1).shape,
-        landcover_fill_value, dtype=np.byte)
+        landcover_fill_value, dtype=np.uint8)
 
     # load threshold list according to `mask_type`
     threshold_list = landcover_threshold_dict[mask_type.lower()]
