@@ -12,6 +12,8 @@ from ruamel.yaml import YAML as ruamel_yaml
 from osgeo.gdalconst import GDT_Float32
 from osgeo import gdal, osr
 from scipy.ndimage import binary_dilation
+from dataclasses import dataclass, field
+from typing import Any
 
 from proteus.core import save_as_cog
 
@@ -304,38 +306,205 @@ class HlsThresholds:
         self.lcmask_nir = None
 
 
+@dataclass(frozen=True)
 class RunConfigConstants:
     """
-    Placeholder for constants defined by the default runconfig file
+    Stores the constants defined by the runconfig file(s).
+
+    Values from the User runconfig file take precedence over the
+    values from the default runconfig file, and all fields will be
+    initialized. This object will be immutable after initialization.
 
     Attributes
     ----------
     hls_thresholds : HlsThresholds
         HLS reflectance thresholds for generating DSWx-HLS products
     flag_use_otsu_terrain_masking: bool
-           Flag to indicate whether the terrain masking should be computed
-           with the Otsu threshold method
+        Flag to indicate whether the terrain masking should be computed
+        with the Otsu threshold method
     min_slope_angle: float
-           Minimum slope angle
+        Minimum slope angle
     max_sun_local_inc_angle: float
-           Maximum local-incidence angle
+        Maximum local-incidence angle
     mask_adjacent_to_cloud_mode: str
-           Define how areas adjacent to cloud/cloud-shadow should be handled.
-           Options: "mask", "ignore", and "cover"
+        Define how areas adjacent to cloud/cloud-shadow should be handled.
+        Options: "mask", "ignore", and "cover"
     browse_image_height: int
-            Height in pixels of the browse image PNG
+        Height in pixels of the browse image PNG
     browse_image_width: int
-            Width in pixels of the browse image PNG
+        Width in pixels of the browse image PNG
     """
-    def __init__(self):
-        self.hls_thresholds = HlsThresholds()
-        self.flag_use_otsu_terrain_masking = None
-        self.min_slope_angle = None
-        self.max_sun_local_inc_angle = None
-        self.mask_adjacent_to_cloud_mode = None
-        self.browse_image_height = None
-        self.browse_image_width = None
- 
+
+    default_runconfig_file: str
+    runconfig_schema: str = None
+    user_runconfig_file: str = None
+
+    hls_thresholds: Any = field(init=False)  # HlsThresholds() object
+    flag_use_otsu_terrain_masking: bool = field(init=False)
+    min_slope_angle: float = field(init=False)
+    max_sun_local_inc_angle: float = field(init=False)
+    mask_adjacent_to_cloud_mode: bool = field(init=False)
+    browse_image_height: int = field(init=False)
+    browse_image_width: int = field(init=False)
+
+
+    def __init__(self, default_runconfig_file,
+                       runconfig_schema=None,
+                       user_runconfig_file=None):
+        """
+        Initializes the RunConfigConstants object with the highest-precedence
+        values in the provided runconfig file(s).
+
+        Values from attributes of `user_runconfig_file` have higher 
+        precendence than values in `default_runconfig_file`. Input
+        file(s) will be validated against the schema. After
+        initialization, all fields in the instance will contain a value.
+
+        Parameters
+        ----------
+        default_runconfig_file : str
+            Path to the default runconfig .yaml file
+        runconfig_schema : str
+            Path to the default runconfig schema .yaml file
+        user_runconfig_file : str, optional
+            Path to the user-provided runconfig .yaml file.
+            If `None`, all attributes will be initialized to the
+            values in `default_runconfig_file`.
+            Defaults to None.
+        """
+
+        # Validate and store input parameters
+
+        if not os.path.isfile(default_runconfig_file):
+            error_msg = f'ERROR invalid file {default_runconfig_file}'
+            logger.info(error_msg)
+            raise Exception(error_msg)
+        else:
+            object.__setattr__(self, 'default_runconfig_file', default_runconfig_file)
+        
+        if user_runconfig_file is not None and \
+            not os.path.isfile(user_runconfig_file):
+
+            error_msg = f'ERROR invalid file {user_runconfig_file}'
+            logger.info(error_msg)
+            raise Exception(error_msg)
+        else:
+            object.__setattr__(self, 'user_runconfig_file', user_runconfig_file)
+            
+        if runconfig_schema is not None and \
+            not os.path.isfile(runconfig_schema):
+
+            error_msg = f'ERROR invalid file {runconfig_schema}'
+            logger.info(error_msg)
+            raise Exception(error_msg)
+        else:
+            object.__setattr__(self, 'runconfig_schema', runconfig_schema)
+
+        # Get the final runconfig
+        runconfig = self.get_final_runconfig_dict()
+
+        # Populate this instance of RunConfigConstants with the
+        # final values in `runconfig`. The default runconfig
+        # /should/ have all fields from the schema (including 
+        # the non-required fields), so there should not be any KeyErrors.
+        processing_group = runconfig['runconfig']['groups']['processing']
+        browse_image_group = runconfig['runconfig']['groups']['browse_image_group']
+        hls_thresholds_group = runconfig['runconfig']['groups']['hls_thresholds']
+
+        # Because this dataclass is frozen (immutable),
+        # set the attributes via the superclass.
+        hls_thresholds_tmp = HlsThresholds()
+        # copy HLS thresholds from runconfig dictionary
+        logger.info('Getting Runconfig HLS thresholds:')
+        for key in hls_thresholds_group.keys():
+            logger.info(f'     {key}: {hls_thresholds_group[key]}')
+            hls_thresholds_tmp.__setattr__(key, hls_thresholds_group[key])
+        object.__setattr__(self, 'hls_thresholds', hls_thresholds_tmp)
+
+        logger.info('Getting Runconfig constants:')
+
+        runconfig_constants_dict = {
+            'flag_use_otsu_terrain_masking' : processing_group,
+            'min_slope_angle' : processing_group,
+            'max_sun_local_inc_angle' : processing_group,
+            'mask_adjacent_to_cloud_mode' : processing_group,
+            'browse_image_height' : browse_image_group,
+            'browse_image_width' : browse_image_group
+        }
+
+        for (const_name, const_group) in runconfig_constants_dict.items():
+            # Because this dataclass is frozen (immutable), 
+            # set the attributes via the superclass.
+            object.__setattr__(self, const_name, const_group[const_name])
+            logger.info(f'     {const_name}: {getattr(self, const_name)}')
+
+        # Initialization is complete
+
+
+    def get_final_runconfig_dict(self, quiet=False):
+        """Uses the runconfig file(s) and schema supplied during
+        class initialization to generate a final runconfig dict.
+        """
+        # Parse the default runconfig into a dictionary
+        parser = ruamel_yaml(typ='safe')
+        with open(self.default_runconfig_file, 'r') as f:
+            runconfig = parser.load(f)
+        
+        # If a user input file exists, validate it, parse it,
+        # and update the `runconfig` dict with any new values from it.
+        if self.user_runconfig_file is not None:
+            if not quiet:
+                logger.info(f'Input runconfig file: {self.user_runconfig_file}')
+
+            # Parse schema
+            schema = yamale.make_schema(self.runconfig_schema, parser='ruamel')
+
+            # Validate user runconfig file
+            data = yamale.make_data(self.user_runconfig_file, parser='ruamel')
+            if not quiet:
+                logger.info(f'Validating runconfig file: {self.user_runconfig_file}')
+            yamale.validate(schema, data)
+
+            # parse user config into a dict
+            with open(self.user_runconfig_file) as f_yaml:
+                user_runconfig = parser.load(f_yaml)
+
+            # Update the default runcofig with available non-Nonetype values
+            # from the user runconfig
+            runconfig = _deep_update(runconfig, user_runconfig)
+
+        return runconfig
+
+
+def _deep_update(main_dict, update_dict):
+    """
+    Update main input dictionary with non-Nonetype values from
+    a second (update) dictionary.
+    
+    Source: https://stackoverflow.com/questions/3232943/update-value-of-a-nested-dictionary-of-varying-depth
+
+    Parameters
+    ----------
+    main_dict: dict
+        Input dictionary
+    update_dict: dict
+        Update dictionary
+
+    Returns
+    -------
+    updated_dict : dict
+        Updated dictionary. If a key's value in the `update_dict` 
+        is None, the main dictionary's corresponding value will
+        not be updated.
+    """
+    for key, val in update_dict.items():
+        if isinstance(val, dict):
+            main_dict[key] = _deep_update(main_dict.get(key, {}), val)
+        elif val is not None:
+            main_dict[key] = val
+
+    # return updated main_dict
+    return main_dict
 
 
 def get_dswx_hls_cli_parser():
@@ -476,18 +645,6 @@ def get_dswx_hls_cli_parser():
                         help='Output browse image file (png)')
 
     # Parameters
-    parser.add_argument('--bheight'
-                        '--browse-image-height',
-                        dest='browse_image_height',
-                        type=int,
-                        help='Height in pixels for browse image PNG')
-
-    parser.add_argument('--bwidth'
-                        '--browse-image-width',
-                        dest='browse_image_width',
-                        type=int,
-                        help='Width in pixels for browse image PNG')
-
     parser.add_argument('--offset-and-scale-inputs',
                         dest='flag_offset_and_scale_inputs',
                         action='store_true',
@@ -507,31 +664,6 @@ def get_dswx_hls_cli_parser():
                         type=str,
                         help='Product ID that will be saved in the output'
                         "product's metadata")
-
-    parser.add_argument('--use-otsu-terrain-masking',
-                        dest='flag_use_otsu_terrain_masking',
-                        action='store_true',
-                        default=None,
-                        help=('Compute and apply terrain masking using Otsu'
-                              ' thresholding'))
-
-    parser.add_argument('--min-slope-angle',
-                        dest='min_slope_angle',
-                        type=float,
-                        help='')
-
-    parser.add_argument('--max-sun-local-inc-angle',
-                        dest='max_sun_local_inc_angle',
-                        type=float,
-                        help='Maximum local-incidence angle')
-
-    parser.add_argument('--mask-adjacent-to-cloud-mode',
-                        dest='mask_adjacent_to_cloud_mode',
-                        type=str,
-                        choices=['mask', 'ignore', 'cover'],
-                        help='Define how areas adjacent to cloud/cloud-shadow'
-                        ' should be handled. Options: "mask", "ignore", and'
-                        ' "cover"')
 
     parser.add_argument('--debug',
                         dest='flag_debug',
@@ -2456,44 +2588,43 @@ def _warp(input_file, geotransform, projection,
 
     return relocated_array
 
-def _deep_update(main_dict, update_dict):
-    """Update input dictionary with a second (update) dictionary
-    https://stackoverflow.com/questions/3232943/update-value-of-a-nested-dictionary-of-varying-depth
-
-       Parameters
-       ----------
-       main_dict: dict
-              Input dictionary
-       update_dict: dict
-              Update dictionary
-
-       Returns
-       -------
-       updated_dict : dict
-              Updated dictionary
-    """
-    for key, val in update_dict.items():
-        if isinstance(val, dict):
-            main_dict[key] = _deep_update(main_dict.get(key, {}), val)
-        else:
-            main_dict[key] = val
-
-    # return updated main_dict
-    return main_dict
-
 
 def parse_runconfig_file(user_runconfig_file = None, args = None):
     """
     Parse run configuration file updating an argument
-    (argparse.Namespace) and an HlsThresholds object
+    (argparse.Namespace) and a RunConfigConstants object.
 
-       Parameters
-       ----------
-       user_runconfig_file: str (optional)
-              Run configuration (runconfig) filename
-       args: argparse.Namespace (optional)
-              Argument object
+    Parse input values for DSWx-HLS from runconfig files 
+    and CLI arguments, update the args (if available),
+    and return the runconfig constants.
+    
+    Parameters
+    ----------
+    user_runconfig_file: str (optional)
+        Run configuration (runconfig) filename
+        If `user_runconfig_file` is None, default runconfig values
+        be taken from the default DSWx-HLS runconfig file.
+        Defaults to None.
+    args: argparse.Namespace (optional)
+        Mutable Argument object
+        This will be updated with the variable fields from the
+        `user_runconfig_file` if it is available, or otherwise
+        from the default DSWx-HLS runconfig file.
+        If `args` is None, this function will only generate
+        `runconfig_constants` and return that; note that this means
+        that the variable fields of the runconfig files will not
+        be processed.
+        Defaults to None.
+
+    Returns
+    -------
+    runconfig_constants : RunConfigConstants
+        An instance of RunconfigConstants, populated with higher
+        precendence from the `user_runconfig_file` (if available),
+        and otherwise the default DSWx-HLS runconfig file.
     """
+
+    # Get the paths for the default runconfig .yaml and schema.
     bin_dirname = os.path.dirname(__file__)
     source_dirname = os.path.split(bin_dirname)[0]
     default_runconfig_file = f'{source_dirname}/proteus/defaults/dswx_hls.yaml'
@@ -2503,66 +2634,16 @@ def parse_runconfig_file(user_runconfig_file = None, args = None):
     yaml_schema = f'{source_dirname}/proteus/schemas/dswx_hls.yaml'
     logger.info(f'YAML schema: {yaml_schema}')
 
-    schema = yamale.make_schema(yaml_schema, parser='ruamel')
-
-    # parse default config
-    parser = ruamel_yaml(typ='safe')
-    with open(default_runconfig_file, 'r') as f:
-        default_runconfig = parser.load(f)
-
-    if user_runconfig_file is not None:
-        if not os.path.isfile(user_runconfig_file):
-            error_msg = f'ERROR invalid file {user_runconfig_file}'
-            logger.info(error_msg)
-            raise Exception(error_msg)
-
-        logger.info(f'Input runconfig file: {user_runconfig_file}')
-
-        data = yamale.make_data(user_runconfig_file, parser='ruamel')
-
-        logger.info(f'Validating runconfig file: {user_runconfig_file}')
-        yamale.validate(schema, data)
-
-        # parse user config
-        with open(user_runconfig_file) as f_yaml:
-            user_runconfig = parser.load(f_yaml)
-
-        # copy user suppiled config into default config
-        runconfig = _deep_update(default_runconfig, user_runconfig)
-
-    else:
-        runconfig = default_runconfig
-
-    runconfig_constants = RunConfigConstants()
-    processing_group = runconfig['runconfig']['groups']['processing']
-    browse_image_group = runconfig['runconfig']['groups']['browse_image_group']
-    hls_thresholds_user = runconfig['runconfig']['groups']['hls_thresholds']
-
-    # copy some processing parameters from runconfig dictionary
-    runconfig_constants_dict = runconfig_constants.__dict__
-    for key in processing_group.keys():
-        if key not in runconfig_constants_dict.keys():
-            continue
-        runconfig_constants.__setattr__(key, processing_group[key])
-
-    # copy browse image parameters from runconfig dictionary
-    for key in browse_image_group.keys():
-        if key not in runconfig_constants_dict.keys():
-            continue
-        runconfig_constants.__setattr__(key, browse_image_group[key])
-
-    # copy HLS thresholds from runconfig dictionary
-    if hls_thresholds_user is not None:
-        logger.info('HLS thresholds:')
-        for key in hls_thresholds_user.keys():
-            logger.info(f'     {key}: {hls_thresholds_user[key]}')
-            runconfig_constants.hls_thresholds.__setattr__(key, hls_thresholds_user[key])
+    # Get the highest-precendence constants from the runconfig file(s)
+    runconfig_constants = RunConfigConstants(default_runconfig_file=default_runconfig_file,
+                                            runconfig_schema=yaml_schema, 
+                                            user_runconfig_file=user_runconfig_file)
 
     if args is None:
         return runconfig_constants
 
     # Update args with runconfig_constants attributes
-    for key in runconfig_constants_dict.keys():
+    for key in runconfig_constants.__dict__.keys():
         try:
             user_attr = getattr(args, key)
         except AttributeError:
@@ -2570,7 +2651,10 @@ def parse_runconfig_file(user_runconfig_file = None, args = None):
         if user_attr is not None:
             continue
         setattr(args, key, getattr(runconfig_constants, key))
- 
+
+    # Get the final runconfig dict
+    runconfig = runconfig_constants.get_final_runconfig_dict(quiet=True)
+
     input_file_path = runconfig['runconfig']['groups']['input_file_group'][
         'input_file_path']
 
@@ -2627,7 +2711,7 @@ def parse_runconfig_file(user_runconfig_file = None, args = None):
     if product_id is None:
         product_id = 'dswx_hls'
 
-
+    processing_group = runconfig['runconfig']['groups']['processing']
     for i, (layer_name, args_name) in \
             enumerate(layer_names_to_args_dict.items()):
         layer_number = i + 1
@@ -2658,6 +2742,7 @@ def parse_runconfig_file(user_runconfig_file = None, args = None):
         setattr(args, args_name, runconfig_layer_file)
 
     # Browse Image Filename
+    browse_image_group = runconfig['runconfig']['groups']['browse_image_group']
     if browse_image_group['save_browse']:
         # Get user's CLI input for the browse image filename
         cli_arg_name = 'output_browse_image'
@@ -3135,7 +3220,9 @@ def generate_dswx_layers(input_list,
                                      browse_image_width is None)
 
     if flag_read_runconfig_constants:
+        # Get constants from default runconfig .yaml file
         runconfig_constants = parse_runconfig_file()
+
         if hls_thresholds is None:
             hls_thresholds = runconfig_constants.hls_thresholds
         if flag_use_otsu_terrain_masking is None:
