@@ -3,8 +3,10 @@ import argparse
 from osgeo import gdal
 from proteus.dswx_hls import (
     band_description_dict,
-    save_cloud_mask,
-    save_dswx_product)
+    save_cloud_layer,
+    save_dswx_product,
+    save_array,
+    get_diagnostic_layer_ctable)
 
 
 def _get_parser():
@@ -29,10 +31,15 @@ def _get_parser():
 
     # Parameters
     parser_dataset = parser.add_mutually_exclusive_group()
+    parser_dataset.add_argument('--diag'
+                                '--diag-layer',
+                                action='store_true',
+                                dest='diag_layer',
+                                help='Append color table to cloud/cloud-shadow mask')
     parser_dataset.add_argument('--cloud'
                                 '--cloud-mask',
                                 action='store_true',
-                                dest='cloud_mask',
+                                dest='cloud_layer',
                                 help='Append color table to cloud/cloud-shadow mask')
 
     parser_dataset.add_argument('--wtr',
@@ -72,8 +79,10 @@ def main():
             layer_name = 'WTR-1'
         elif args.shadow_masked_dswx:
             layer_name = 'WTR-2'
-        elif args.cloud_mask:
+        elif args.cloud_layer:
             layer_name = 'CLOUD'
+        elif args.diag_layer:
+            layer_name = 'DIAG'
         else:
             layer_name = 'WTR'
 
@@ -85,13 +94,24 @@ def main():
         image = layer_gdal_dataset.ReadAsArray()
 
     metadata_dict = {}
-    if args.cloud_mask:
-        print('Appending color table to cloud mask')
-        save_cloud_mask(image, args.output_file, metadata_dict, geotransform, 
-                        projection)
+    if args.diag_layer:
+        print('Appending color table to the DIAG layer')
+        layer_name = 'DIAG'
+        diag_ctable = get_diagnostic_layer_ctable(image)
+        description = 'Diagnostic layer (DIAG)'
+        save_array(image, args.output_file, metadata_dict, geotransform,
+                   projection, output_dtype=gdal.GDT_Byte,
+                   description=description,
+                   ctable=diag_ctable)
+
+    elif args.cloud_mask:
+        print('Appending color table to CLOUD layer')
+        layer_name = 'CLOUD'
+        save_cloud_layer(image, layer_name, args.output_file, metadata_dict,
+                        geotransform, projection)
     else:
         print('Appending color table to interpreted DSWx layer')
-        save_dswx_product(image, args.output_file, metadata_dict,
+        save_dswx_product(image, layer_name, args.output_file, metadata_dict,
                           geotransform, projection)
 
 

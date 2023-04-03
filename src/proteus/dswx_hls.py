@@ -1112,13 +1112,13 @@ def create_landcover_mask(copernicus_landcover_file,
     description = band_description_dict['LAND']
 
     if output_file is not None:
-        _save_array(hierarchy_combined, output_file,
-                    dswx_metadata_dict, geotransform,
-                    projection, description = description,
-                    scratch_dir=scratch_dir,
-                    output_files_list = output_files_list,
-                    ctable=ctable,
-                    no_data_value=landcover_fill_value)
+        save_array(hierarchy_combined, output_file,
+                   dswx_metadata_dict, geotransform,
+                   projection, description = description,
+                   scratch_dir=scratch_dir,
+                   output_files_list = output_files_list,
+                   ctable=ctable,
+                   no_data_value=landcover_fill_value)
 
     return hierarchy_combined
 
@@ -2535,6 +2535,51 @@ def _get_confidence_layer_ctable():
     return conf_ctable
 
 
+def get_diagnostic_layer_ctable(diagnostic_layer):
+    """
+       Get diagnostic layer RGB color table
+
+       Returns
+       -------
+       diagnostic_layer_ctable : gdal.ColorTable
+              Diagnostic layer color table
+    """
+    # create color table
+    diagnostic_layer_ctable = gdal.ColorTable()
+
+    n_bits = 5
+    unique_elements = np.unique(diagnostic_layer)
+    for element in unique_elements:
+
+        if element == DIAGNOSTIC_LAYER_NO_DATA_BINARY_REPR:
+            continue
+
+        # Count the number of positive tests in this element.
+        # Ex: the element 10011 has three 1s, which means three positive tests.
+        n_positive_tests = 0
+        element_floor = element
+
+        for i in range(n_bits):
+            element_floor, remainder = np.divmod(element_floor, 10)
+            n_positive_tests += remainder
+
+        # Based on the number of positive tests, set the RGB color table 
+        # values to a gradation of blues. The greater the number of positive
+        # tests, the darker the blue:
+        # 0 positive tests is white, and 5 positive tests is pure blue.
+        positive_tests_255 = int(float(n_positive_tests) * 255 // n_bits)
+
+        diagnostic_layer_ctable.SetColorEntry(
+            int(element), (255 - positive_tests_255,
+                           255 - positive_tests_255,
+                           255))
+
+    # Transparent black - Fill value
+    diagnostic_layer_ctable.SetColorEntry(DIAGNOSTIC_LAYER_NO_DATA_BINARY_REPR,
+                                          (0, 0, 0, 255))
+    return diagnostic_layer_ctable
+
+
 def get_transparency_rgb_vals(top_rgb, bottom_rgb, alpha):
     '''
     Compute the RGB values to be displayed if the top layer
@@ -2882,10 +2927,10 @@ def _save_binary_water(binary_water_layer, output_file, dswx_metadata_dict,
     logger.info(f'file saved: {output_file}')
 
 
-def _save_array(input_array, output_file, dswx_metadata_dict, geotransform,
-                projection, description = None, scratch_dir = '.',
-                output_files_list = None, output_dtype = gdal.GDT_Byte,
-                ctable = None, no_data_value = None):
+def save_array(input_array, output_file, dswx_metadata_dict, geotransform,
+               projection, description = None, scratch_dir = '.',
+               output_files_list = None, output_dtype = gdal.GDT_Byte,
+               ctable = None, no_data_value = None):
     """Save a generic DSWx-HLS layer (e.g., diagnostic layer, shadow layer, etc.)
 
        Parameters
@@ -5111,24 +5156,24 @@ def generate_dswx_layers(input_list,
         dem = _crop_2d_array_all_sides(dem_with_margin, DEM_MARGIN_IN_PIXELS)
         del dem_with_margin
         if output_dem_layer is not None:
-            _save_array(dem, output_dem_layer,
-                        dswx_metadata_dict, geotransform, projection,
-                        description=band_description_dict['DEM'],
-                        output_dtype = gdal.GDT_Float32,
-                        scratch_dir=scratch_dir,
-                        output_files_list=build_vrt_list,
-                        no_data_value=np.nan)
+            save_array(dem, output_dem_layer,
+                       dswx_metadata_dict, geotransform, projection,
+                       description=band_description_dict['DEM'],
+                       output_dtype = gdal.GDT_Float32,
+                       scratch_dir=scratch_dir,
+                       output_files_list=build_vrt_list,
+                       no_data_value=np.nan)
         if not output_file:
             del dem
 
         if output_shadow_layer:
             binary_mask_ctable = _get_binary_mask_ctable()
-            _save_array(shadow_layer, output_shadow_layer,
-                        dswx_metadata_dict, geotransform, projection,
-                        description=band_description_dict['SHAD'],
-                        scratch_dir=scratch_dir,
-                        output_files_list=build_vrt_list,
-                        ctable=binary_mask_ctable)
+            save_array(shadow_layer, output_shadow_layer,
+                       dswx_metadata_dict, geotransform, projection,
+                       description=band_description_dict['SHAD'],
+                       scratch_dir=scratch_dir,
+                       output_files_list=build_vrt_list,
+                       ctable=binary_mask_ctable)
 
     landcover_mask = None
     if landcover_file is not None and worldcover_file is not None:
@@ -5172,13 +5217,13 @@ def generate_dswx_layers(input_list,
     del diagnostic_layer_decimal
 
     if output_diagnostic_layer:
-        _save_array(diagnostic_layer, output_diagnostic_layer,
-                    dswx_metadata_dict, geotransform, projection,
-                    description=band_description_dict['DIAG'],
-                    scratch_dir=scratch_dir,
-                    output_files_list=build_vrt_list,
-                    output_dtype=gdal.GDT_UInt16,
-                    no_data_value=DIAGNOSTIC_LAYER_NO_DATA_BINARY_REPR)
+        save_array(diagnostic_layer, output_diagnostic_layer,
+                   dswx_metadata_dict, geotransform, projection,
+                   description=band_description_dict['DIAG'],
+                   scratch_dir=scratch_dir,
+                   output_files_list=build_vrt_list,
+                   output_dtype=gdal.GDT_UInt16,
+                   no_data_value=DIAGNOSTIC_LAYER_NO_DATA_BINARY_REPR)
 
     if shoreline_shapefile is not None:
         # apply ocean mask
@@ -5267,15 +5312,15 @@ def generate_dswx_layers(input_list,
         # add the browse image GEOTIFF to the output files list
         output_files_list += [browse_image_geotiff_filename]
 
-        _save_array(input_array=browse_arr,
-                    output_file=browse_image_geotiff_filename,
-                    dswx_metadata_dict=dswx_metadata_dict,
-                    geotransform=geotransform,
-                    projection=projection,
-                    scratch_dir=scratch_dir,
-                    output_dtype=gdal.GDT_Byte,  # unsigned int 8
-                    ctable=browse_ctable,
-                    no_data_value=UINT8_FILL_VALUE)
+        save_array(input_array=browse_arr,
+                   output_file=browse_image_geotiff_filename,
+                   dswx_metadata_dict=dswx_metadata_dict,
+                   geotransform=geotransform,
+                   projection=projection,
+                   scratch_dir=scratch_dir,
+                   output_dtype=gdal.GDT_Byte,  # unsigned int 8
+                   ctable=browse_ctable,
+                   no_data_value=UINT8_FILL_VALUE)
 
         # Convert the geotiff to a resized PNG to create the browse image PNG
         geotiff2png(src_geotiff_filename=browse_image_geotiff_filename,
@@ -5308,15 +5353,15 @@ def generate_dswx_layers(input_list,
         confidence_layer = _get_confidence_layer(wtr_2_layer=wtr_2_layer,
                                                  cloud_layer=cloud_layer)
         confidence_layer_ctable = _get_confidence_layer_ctable()
-        _save_array(confidence_layer,
-                    output_confidence_layer,
-                    dswx_metadata_dict,
-                    geotransform, projection,
-                    scratch_dir=scratch_dir,
-                    description=band_description_dict['CONF'],
-                    output_files_list=build_vrt_list,
-                    ctable=confidence_layer_ctable,
-                    no_data_value=UINT8_FILL_VALUE)
+        save_array(confidence_layer,
+                   output_confidence_layer,
+                   dswx_metadata_dict,
+                   geotransform, projection,
+                   scratch_dir=scratch_dir,
+                   description=band_description_dict['CONF'],
+                   output_files_list=build_vrt_list,
+                   ctable=confidence_layer_ctable,
+                   no_data_value=UINT8_FILL_VALUE)
 
     # save output_file as GeoTIFF
     if output_file and not output_file.endswith('.vrt'):
