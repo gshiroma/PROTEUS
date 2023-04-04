@@ -100,7 +100,7 @@ def main():
         diag_ctable = get_diagnostic_layer_ctable(image)
         description = 'Diagnostic layer (DIAG)'
         save_array(image, args.output_file, metadata_dict, geotransform,
-                   projection, output_dtype=gdal.GDT_Byte,
+                   projection, output_dtype=gdal.GDT_UInt16,
                    description=description,
                    ctable=diag_ctable)
 

@@ -2549,6 +2549,7 @@ def get_diagnostic_layer_ctable(diagnostic_layer):
 
     n_bits = 5
     unique_elements = np.unique(diagnostic_layer)
+    max_v = np.max(unique_elements)
     for element in unique_elements:
 
         if element == DIAGNOSTIC_LAYER_NO_DATA_BINARY_REPR:
@@ -2567,11 +2568,13 @@ def get_diagnostic_layer_ctable(diagnostic_layer):
         # values to a gradation of blues. The greater the number of positive
         # tests, the darker the blue:
         # 0 positive tests is white, and 5 positive tests is pure blue.
-        positive_tests_255 = int(float(n_positive_tests) * 255 // n_bits)
+        positive_tests_255 = int(255 * np.sqrt(float(n_positive_tests) / n_bits))
+
+        green_value = 255 - int(255 * np.sqrt(float(element) / max_v))
 
         diagnostic_layer_ctable.SetColorEntry(
             int(element), (255 - positive_tests_255,
-                           255 - positive_tests_255,
+                           green_value,
                            255))
 
     # Transparent black - Fill value
